@@ -14,6 +14,7 @@ func main() {
 		Addr: fmt.Sprintf(":%d", port),
 	}
 	mux.Handle("/", http.FileServer(http.Dir(".")))
+    mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
 	log.Println("Listening on port:", port)
 	log.Fatal(server.ListenAndServe())
 }
