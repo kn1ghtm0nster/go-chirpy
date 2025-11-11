@@ -4,9 +4,38 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync/atomic"
 
 	"github.com/kn1ghtm0nster/handlers"
 )
+
+type apiConfig struct {
+	fileserverHits atomic.Int32
+}
+
+func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cfg.fileserverHits.Add(1)
+		next.ServeHTTP(w, r)
+	})
+	
+}
+
+func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
+	currCount := cfg.fileserverHits.Load()
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+
+	message := fmt.Sprintf("Hits: %d\n", currCount)
+	w.Write([]byte(message))
+}
+
+func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	cfg.fileserverHits.Store(0)
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	w.Write([]byte("OK\n"))
+}
 
 func main() {
 	port := 8080
@@ -15,8 +44,14 @@ func main() {
 		Handler: mux,
 		Addr: fmt.Sprintf(":%d", port),
 	}
+	apiConfig := &apiConfig{
+		fileserverHits: atomic.Int32{},
+	}
+
 	mux.HandleFunc("/healthz", handlers.ReadinessHandler)
-	mux.Handle("/app/", http.StripPrefix("/app/", http.FileServer(http.Dir("."))))
+	mux.HandleFunc("/metrics", apiConfig.metricsHandler)
+	mux.HandleFunc("/reset", apiConfig.resetMetricsHandler)
+	mux.Handle("/app/", http.StripPrefix("/app/", apiConfig.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
     mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
 	log.Println("Listening on port:", port)
 	log.Fatal(server.ListenAndServe())
