@@ -48,9 +48,9 @@ func main() {
 		fileserverHits: atomic.Int32{},
 	}
 
-	mux.HandleFunc("/healthz", handlers.ReadinessHandler)
-	mux.HandleFunc("/metrics", apiConfig.metricsHandler)
-	mux.HandleFunc("/reset", apiConfig.resetMetricsHandler)
+	mux.HandleFunc("GET /healthz", handlers.ReadinessHandler)
+	mux.HandleFunc("GET /metrics", apiConfig.metricsHandler)
+	mux.HandleFunc("POST /reset", apiConfig.resetMetricsHandler)
 	mux.Handle("/app/", http.StripPrefix("/app/", apiConfig.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
     mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
 	log.Println("Listening on port:", port)
