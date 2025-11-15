@@ -23,12 +23,18 @@ func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
 
 func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	currCount := cfg.fileserverHits.Load()
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	payload := fmt.Sprintf(`
+		<html>
+			<body>
+				<h1>Welcome, Chirpy Admin</h1>
+				<p>Chirpy has been visited %d times!</p>
+			</body>
+		</html>`, currCount)
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-
-	message := fmt.Sprintf("Hits: %d\n", currCount)
-	w.Write([]byte(message))
+	w.Write([]byte(payload))
 }
+
 
 func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
 	cfg.fileserverHits.Store(0)
@@ -49,8 +55,8 @@ func main() {
 	}
 
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
-	mux.HandleFunc("GET /api/metrics", apiConfig.metricsHandler)
-	mux.HandleFunc("POST /api/reset", apiConfig.resetMetricsHandler)
+	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
+	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
 	mux.Handle("/app/", http.StripPrefix("/app/", apiConfig.middlewareMetricsInc(http.FileServer(http.Dir(".")))))
     mux.Handle("/assets/", http.StripPrefix("/assets/", http.FileServer(http.Dir("./assets"))))
 	log.Println("Listening on port:", port)
