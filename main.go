@@ -54,6 +54,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 	}
 
+	mux.HandleFunc("POST /api/validate_chirp", handlers.ChirpValidationHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
