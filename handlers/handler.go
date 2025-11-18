@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/kn1ghtm0nster/structs"
+	"github.com/kn1ghtm0nster/utils"
 )
 
 func ReadinessHandler(w http.ResponseWriter, r *http.Request) {
@@ -29,8 +30,11 @@ func ChirpValidationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// check for profanity
+	cleanedChirp := utils.CleanProfanity(params.Body)
+
 	// if the chirp is longer than 140 characters, return an error
-	if len(params.Body) > 140 {
+	if len(cleanedChirp) > 140 {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		errorResponse := structs.ChirpError{
@@ -41,7 +45,7 @@ func ChirpValidationHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	responseBody := structs.ValidChirp{
-		Valid: true,
+		CleanedBody: cleanedChirp,
 	}
 	data, err := json.Marshal(responseBody)
 	if err != nil {

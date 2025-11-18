@@ -11,5 +11,5 @@ type ChirpError struct {
 
 
 type ValidChirp struct {
-	Valid bool `json:"valid"`
+	CleanedBody string `json:"cleaned_body"`
 }
