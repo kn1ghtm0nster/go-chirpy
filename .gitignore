@@ -1,1 +1,6 @@
+# environment variables
+.env
+
+# Go build files
+kn1ghtm0nster
 *out
