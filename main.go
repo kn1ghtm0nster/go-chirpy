@@ -2,12 +2,15 @@ package main
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"sync/atomic"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/joho/godotenv"
 	_ "github.com/lib/pq"
 
@@ -15,9 +18,21 @@ import (
 	"github.com/kn1ghtm0nster/internal/database"
 )
 
+type User struct {
+	ID 			uuid.UUID 		`json:"id"`
+	CreatedAt 	time.Time 	`json:"created_at"`
+	UpdatedAt 	time.Time 	`json:"updated_at"`
+	Email 		string 		`json:"email"`
+}
+
+type CreateUserRequest struct {
+	Email string `json:"email"`
+}
+
 type apiConfig struct {
-	fileserverHits atomic.Int32
-	db *database.Queries
+	fileserverHits 	atomic.Int32
+	db 				*database.Queries
+	platform 		string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -44,10 +59,58 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 
 
 func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
+	// check platform
+	if cfg.platform != "dev" {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	// reset users table
+	err := cfg.db.DeleteAllUsers(r.Context())
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
 	cfg.fileserverHits.Store(0)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte("OK\n"))
+}
+
+func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) {
+
+	// Parse request body
+	var req CreateUserRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	// ensure email is not empty
+	if req.Email == "" {
+		http.Error(w, "Email is required", http.StatusBadRequest)
+		return
+	}
+
+	// create the new user
+	user, err := cfg.db.CreateUser(r.Context(), req.Email)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// map returned user to response struct
+	resp := User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	// send response
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
 }
 
 func main() {
@@ -61,7 +124,7 @@ func main() {
 	defer db.Close()
 
 	dbQueries := database.New(db)
-
+	platform := os.Getenv("PLATFORM")
 	port := 8080
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -71,8 +134,10 @@ func main() {
 	apiConfig := &apiConfig{
 		fileserverHits: atomic.Int32{},
 		db: dbQueries,
+		platform: platform,
 	}
 
+	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
 	mux.HandleFunc("POST /api/validate_chirp", handlers.ChirpValidationHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
