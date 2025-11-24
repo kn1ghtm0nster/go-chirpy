@@ -16,6 +16,7 @@ import (
 
 	"github.com/kn1ghtm0nster/handlers"
 	"github.com/kn1ghtm0nster/internal/database"
+	"github.com/kn1ghtm0nster/utils"
 )
 
 type User struct {
@@ -27,6 +28,19 @@ type User struct {
 
 type CreateUserRequest struct {
 	Email string `json:"email"`
+}
+
+type CreateChirpRequest struct {
+	Body   string    `json:"body"`
+	UserID uuid.UUID `json:"user_id"`
+}
+
+type Chirp struct {
+	ID 	  		uuid.UUID `json:"id"`
+	CreatedAt 	time.Time `json:"created_at"`
+	UpdatedAt 	time.Time `json:"updated_at"`
+	Body      	string    `json:"body"`
+	UserID    	uuid.UUID `json:"user_id"`
 }
 
 type apiConfig struct {
@@ -113,6 +127,50 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request) {
+	var req CreateChirpRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if req.Body == "" || req.UserID == uuid.Nil {
+		http.Error(w, "Body and UserID are required", http.StatusBadRequest)
+		return
+	}
+
+	// clean the body
+	cleanedBody := utils.CleanProfanity(req.Body)
+
+	// ensure length is less than 140 chars
+	if len(cleanedBody) > 140 {
+		http.Error(w, "Chirp is too long", http.StatusBadRequest)
+		return
+	}
+
+	newChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
+		Body:   cleanedBody,
+		UserID: req.UserID,
+	})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := Chirp{
+		ID:        newChirp.ID,
+		CreatedAt: newChirp.CreatedAt,
+		UpdatedAt: newChirp.UpdatedAt,
+		Body:      newChirp.Body,
+		UserID:    newChirp.UserID,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(resp)
+}
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -138,7 +196,7 @@ func main() {
 	}
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
-	mux.HandleFunc("POST /api/validate_chirp", handlers.ChirpValidationHandler)
+	mux.HandleFunc("POST /api/chirps", apiConfig.createChirpHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
