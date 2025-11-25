@@ -20,7 +20,7 @@ import (
 )
 
 type User struct {
-	ID 			uuid.UUID 		`json:"id"`
+	ID 			uuid.UUID 	`json:"id"`
 	CreatedAt 	time.Time 	`json:"created_at"`
 	UpdatedAt 	time.Time 	`json:"updated_at"`
 	Email 		string 		`json:"email"`
@@ -171,6 +171,30 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
+	chirps, err := cfg.db.GetAllChirps(r.Context())
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := make([]Chirp, len(chirps))
+	for i, chirp := range chirps {
+		resp[i] = Chirp{
+			ID:        chirp.ID,
+			CreatedAt: chirp.CreatedAt,
+			UpdatedAt: chirp.UpdatedAt,
+			Body:      chirp.Body,
+			UserID:    chirp.UserID,
+		}
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+
 func main() {
 	godotenv.Load()
 	dbURL := os.Getenv("DB_URL")
@@ -197,6 +221,7 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
 	mux.HandleFunc("POST /api/chirps", apiConfig.createChirpHandler)
+	mux.HandleFunc("GET /api/chirps", apiConfig.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
