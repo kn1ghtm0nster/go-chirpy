@@ -71,7 +71,6 @@ func (cfg *apiConfig) metricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(payload))
 }
 
-
 func (cfg *apiConfig) resetMetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// check platform
 	if cfg.platform != "dev" {
@@ -194,6 +193,38 @@ func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (cfg *apiConfig) getChirpByIdHandler(w http.ResponseWriter, r *http.Request) {
+	chirpID := r.PathValue("chirpID")
+
+	parsedId, err := uuid.Parse(chirpID)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+	}
+
+	chirp, err := cfg.db.GetChirpById(r.Context(), parsedId)
+	// handle not found errors on top of other possible errors
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Chirp not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := Chirp{
+		ID:        chirp.ID,
+		CreatedAt: chirp.CreatedAt,
+		UpdatedAt: chirp.UpdatedAt,
+		Body:      chirp.Body,
+		UserID:    chirp.UserID,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
 
 func main() {
 	godotenv.Load()
@@ -222,6 +253,7 @@ func main() {
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
 	mux.HandleFunc("POST /api/chirps", apiConfig.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiConfig.getAllChirpsHandler)
+	mux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig.getChirpByIdHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
