@@ -15,6 +15,7 @@ import (
 	_ "github.com/lib/pq"
 
 	"github.com/kn1ghtm0nster/handlers"
+	"github.com/kn1ghtm0nster/internal/auth"
 	"github.com/kn1ghtm0nster/internal/database"
 	"github.com/kn1ghtm0nster/utils"
 )
@@ -27,7 +28,8 @@ type User struct {
 }
 
 type CreateUserRequest struct {
-	Email string `json:"email"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type CreateChirpRequest struct {
@@ -41,6 +43,11 @@ type Chirp struct {
 	UpdatedAt 	time.Time `json:"updated_at"`
 	Body      	string    `json:"body"`
 	UserID    	uuid.UUID `json:"user_id"`
+}
+
+type LoginRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
 }
 
 type apiConfig struct {
@@ -99,6 +106,18 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// ensure password is not empty
+	if req.Password == "" {
+		http.Error(w, "Password is required", http.StatusBadRequest)
+		return
+	}
+
+	hashedPassword, err := auth.HashPassword(req.Password)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
 	// ensure email is not empty
 	if req.Email == "" {
 		http.Error(w, "Email is required", http.StatusBadRequest)
@@ -106,7 +125,10 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// create the new user
-	user, err := cfg.db.CreateUser(r.Context(), req.Email)
+	user, err := cfg.db.CreateUser(r.Context(), database.CreateUserParams{
+		Email: 			req.Email,
+		HashedPassword: hashedPassword,
+	})
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -225,6 +247,43 @@ func (cfg *apiConfig) getChirpByIdHandler(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(resp)
 }
 
+func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
+	// Implementation for user login
+	var req LoginRequest
+	err := json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	user, err := cfg.db.GetUserByEmail(r.Context(), req.Email)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	match, err := auth.CheckPasswordHash(req.Password, user.HashedPassword)
+	if err != nil || !match {
+		http.Error(w, "Invalid email or password", http.StatusUnauthorized)
+		return
+	}
+
+	resp := User{
+		ID:        user.ID,
+		CreatedAt: user.CreatedAt,
+		UpdatedAt: user.UpdatedAt,
+		Email:     user.Email,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
 
 func main() {
 	godotenv.Load()
@@ -251,6 +310,7 @@ func main() {
 	}
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
+	mux.HandleFunc("POST /api/login", apiConfig.loginHandler)
 	mux.HandleFunc("POST /api/chirps", apiConfig.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiConfig.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig.getChirpByIdHandler)
