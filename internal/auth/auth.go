@@ -1,6 +1,10 @@
 package auth
 
 import (
+	"fmt"
+	"net/http"
+	"strings"
+
 	"github.com/alexedwards/argon2id"
 )
 
@@ -20,4 +24,20 @@ func CheckPasswordHash(password, hash string) (bool, error) {
 		return false, err
 	}
 	return match, nil
+}
+
+func GetBearerToken(headers http.Header) (string, error) {
+	header := headers.Get("Authorization")
+	if header == "" {
+		return "", fmt.Errorf("no authorization credentials found")
+	}
+
+	// verify header starts with "Bearer "
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "", fmt.Errorf("invalid authorization header")
+	}
+
+	token := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+
+	return token, nil
 }

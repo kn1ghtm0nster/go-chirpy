@@ -34,7 +34,6 @@ type CreateUserRequest struct {
 
 type CreateChirpRequest struct {
 	Body   string    `json:"body"`
-	UserID uuid.UUID `json:"user_id"`
 }
 
 type Chirp struct {
@@ -46,14 +45,24 @@ type Chirp struct {
 }
 
 type LoginRequest struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email    		 string 	`json:"email"`
+	Password 		 string 	`json:"password"`
+	ExpiresInSeconds *int   	`json:"expires_in_seconds,omitempty"`
+}
+
+type LoginResponse struct {
+	ID 			uuid.UUID 	`json:"id"`
+	CreatedAt 	time.Time 	`json:"created_at"`
+	UpdatedAt 	time.Time 	`json:"updated_at"`
+	Email 		string 		`json:"email"`
+	Token		string		`json:"token,omitempty"`
 }
 
 type apiConfig struct {
 	fileserverHits 	atomic.Int32
 	db 				*database.Queries
 	platform 		string
+	secret 			string
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -150,14 +159,27 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 
 func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request) {
 	var req CreateChirpRequest
-	err := json.NewDecoder(r.Body).Decode(&req)
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	err = json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
 	}
 
-	if req.Body == "" || req.UserID == uuid.Nil {
-		http.Error(w, "Body and UserID are required", http.StatusBadRequest)
+	if req.Body == "" {
+		http.Error(w, "Body is required", http.StatusBadRequest)
 		return
 	}
 
@@ -172,7 +194,7 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request)
 
 	newChirp, err := cfg.db.CreateChirp(r.Context(), database.CreateChirpParams{
 		Body:   cleanedBody,
-		UserID: req.UserID,
+		UserID: userID,
 	})
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
@@ -250,10 +272,19 @@ func (cfg *apiConfig) getChirpByIdHandler(w http.ResponseWriter, r *http.Request
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	// Implementation for user login
 	var req LoginRequest
+	tokenExpirationTime := time.Hour // 60 minutes in seconds
+
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
+	}
+
+	if req.ExpiresInSeconds != nil {
+		requestDuration := time.Duration(*req.ExpiresInSeconds) * time.Second
+		if requestDuration < tokenExpirationTime {
+			tokenExpirationTime = requestDuration
+		}
 	}
 
 	user, err := cfg.db.GetUserByEmail(r.Context(), req.Email)
@@ -272,11 +303,18 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := User{
+	token, err := auth.MakeJWT(user.ID, cfg.secret, tokenExpirationTime)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := LoginResponse{
 		ID:        user.ID,
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		Token:    	token,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -297,6 +335,7 @@ func main() {
 
 	dbQueries := database.New(db)
 	platform := os.Getenv("PLATFORM")
+	secret := os.Getenv("SECRET")
 	port := 8080
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -307,6 +346,7 @@ func main() {
 		fileserverHits: atomic.Int32{},
 		db: dbQueries,
 		platform: platform,
+		secret: secret,
 	}
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
