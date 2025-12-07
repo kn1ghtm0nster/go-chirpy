@@ -32,6 +32,11 @@ type CreateUserRequest struct {
 	Password string `json:"password"`
 }
 
+type UpdateUserRequest struct {
+	Email       string `json:"email"`
+	Password    string `json:"password"`
+}
+
 type CreateChirpRequest struct {
 	Body   string    `json:"body"`
 }
@@ -385,6 +390,56 @@ func (cfg *apiConfig) revokeRefreshTokenHandler(w http.ResponseWriter, r *http.R
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (cfg *apiConfig) updateUserEmailPasswordHandler(w http.ResponseWriter, r *http.Request) {
+	var req UpdateUserRequest
+
+	token, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	userID, err := auth.ValidateJWT(token, cfg.secret)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	err = json.NewDecoder(r.Body).Decode(&req)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	newHashedPassword, err := auth.HashPassword(req.Password)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	updatedUser, err := cfg.db.UpdateUserEmailPassword(r.Context(), database.UpdateUserEmailPasswordParams{
+		ID: userID,
+		Email: req.Email,
+		HashedPassword: newHashedPassword,
+	})
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	resp := User{
+		ID:        updatedUser.ID,
+		CreatedAt: updatedUser.CreatedAt,
+		UpdatedAt: updatedUser.UpdatedAt,
+		Email:     updatedUser.Email,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+
+}
+
 
 func main() {
 	godotenv.Load()
@@ -413,6 +468,7 @@ func main() {
 	}
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
+	mux.HandleFunc("PUT /api/users", apiConfig.updateUserEmailPasswordHandler)
 	mux.HandleFunc("POST /api/login", apiConfig.loginHandler)
 	mux.HandleFunc("POST /api/refresh", apiConfig.refreshTokenHandler)
 	mux.HandleFunc("POST /api/revoke", apiConfig.revokeRefreshTokenHandler)
