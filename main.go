@@ -47,7 +47,6 @@ type Chirp struct {
 type LoginRequest struct {
 	Email    		 string 	`json:"email"`
 	Password 		 string 	`json:"password"`
-	ExpiresInSeconds *int   	`json:"expires_in_seconds,omitempty"`
 }
 
 type LoginResponse struct {
@@ -56,6 +55,7 @@ type LoginResponse struct {
 	UpdatedAt 	time.Time 	`json:"updated_at"`
 	Email 		string 		`json:"email"`
 	Token		string		`json:"token,omitempty"`
+	RefreshToken string     `json:"refresh_token,omitempty"`
 }
 
 type apiConfig struct {
@@ -272,19 +272,11 @@ func (cfg *apiConfig) getChirpByIdHandler(w http.ResponseWriter, r *http.Request
 func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 	// Implementation for user login
 	var req LoginRequest
-	tokenExpirationTime := time.Hour // 60 minutes in seconds
 
 	err := json.NewDecoder(r.Body).Decode(&req)
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
-	}
-
-	if req.ExpiresInSeconds != nil {
-		requestDuration := time.Duration(*req.ExpiresInSeconds) * time.Second
-		if requestDuration < tokenExpirationTime {
-			tokenExpirationTime = requestDuration
-		}
 	}
 
 	user, err := cfg.db.GetUserByEmail(r.Context(), req.Email)
@@ -303,7 +295,23 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := auth.MakeJWT(user.ID, cfg.secret, tokenExpirationTime)
+	token, err := auth.MakeJWT(user.ID, cfg.secret, time.Hour)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	refreshToken, err := auth.MakeRefreshToken()
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	createdRefreshToken, err := cfg.db.CreateRefreshToken(r.Context(), database.CreateRefreshTokenParams{
+		UserID: user.ID,
+		Token: refreshToken,
+	})
+
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
@@ -315,11 +323,66 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
 		Token:    	token,
+		RefreshToken: createdRefreshToken.Token,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
+}
+
+func (cfg *apiConfig) refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Extract refresh token from Authorization header
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Look up user from refresh token provided
+	user, err := cfg.db.GetUserFromRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// 3. Generate new access token for that user (1 hour expiry)
+	newAccessToken, err := auth.MakeJWT(user.ID, cfg.secret, time.Hour)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	// 4. Return new access token in response
+	resp := map[string]string{
+		"token": newAccessToken,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp)
+}
+
+func (cfg *apiConfig) revokeRefreshTokenHandler(w http.ResponseWriter, r *http.Request) {
+	// 1. Extract refresh token from Authorization header
+	refreshToken, err := auth.GetBearerToken(r.Header)
+	if err != nil {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	// 2. Revoke the refresh token in the database
+	err = cfg.db.RevokeRefreshToken(r.Context(), refreshToken)
+	if err != nil {
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 
@@ -351,6 +414,8 @@ func main() {
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
 	mux.HandleFunc("POST /api/login", apiConfig.loginHandler)
+	mux.HandleFunc("POST /api/refresh", apiConfig.refreshTokenHandler)
+	mux.HandleFunc("POST /api/revoke", apiConfig.revokeRefreshTokenHandler)
 	mux.HandleFunc("POST /api/chirps", apiConfig.createChirpHandler)
 	mux.HandleFunc("GET /api/chirps", apiConfig.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig.getChirpByIdHandler)
