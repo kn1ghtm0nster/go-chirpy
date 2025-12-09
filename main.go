@@ -25,6 +25,7 @@ type User struct {
 	CreatedAt 	time.Time 	`json:"created_at"`
 	UpdatedAt 	time.Time 	`json:"updated_at"`
 	Email 		string 		`json:"email"`
+	IsChirpyRed bool		`json:"is_chirpy_red"`
 }
 
 type CreateUserRequest struct {
@@ -61,6 +62,16 @@ type LoginResponse struct {
 	Email 		string 		`json:"email"`
 	Token		string		`json:"token,omitempty"`
 	RefreshToken string     `json:"refresh_token,omitempty"`
+	IsChirpyRed bool		`json:"is_chirpy_red"`
+}
+
+type WebHookData struct {
+	UserID 	uuid.UUID `json:"user_id"`
+}
+
+type WebHook struct {
+	Event	string `json:"event"`
+	Data WebHookData `json:"data"`
 }
 
 type apiConfig struct {
@@ -68,6 +79,33 @@ type apiConfig struct {
 	db 				*database.Queries
 	platform 		string
 	secret 			string
+}
+
+func (cfg *apiConfig) polkaWebhookHandler(w http.ResponseWriter, r *http.Request) {
+	var webhookReq WebHook
+	err := json.NewDecoder(r.Body).Decode(&webhookReq)
+	if err != nil {
+		http.Error(w, "Bad request", http.StatusBadRequest)
+		return
+	}
+
+	if webhookReq.Event != "user.upgraded" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+
+	_, err = cfg.db.UpgradeUserChirpyRed(r.Context(), webhookReq.Data.UserID)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			http.Error(w, "User not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (cfg *apiConfig) middlewareMetricsInc(next http.Handler) http.Handler {
@@ -154,6 +192,7 @@ func (cfg *apiConfig) createUserHandler(w http.ResponseWriter, r *http.Request) 
 		CreatedAt: user.CreatedAt,
 		UpdatedAt: user.UpdatedAt,
 		Email:     user.Email,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	// send response
@@ -378,6 +417,7 @@ func (cfg *apiConfig) loginHandler(w http.ResponseWriter, r *http.Request) {
 		Email:     user.Email,
 		Token:    	token,
 		RefreshToken: createdRefreshToken.Token,
+		IsChirpyRed: user.IsChirpyRed,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -481,6 +521,7 @@ func (cfg *apiConfig) updateUserEmailPasswordHandler(w http.ResponseWriter, r *h
 		CreatedAt: updatedUser.CreatedAt,
 		UpdatedAt: updatedUser.UpdatedAt,
 		Email:     updatedUser.Email,
+		IsChirpyRed: updatedUser.IsChirpyRed,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -525,6 +566,7 @@ func main() {
 	mux.HandleFunc("GET /api/chirps", apiConfig.getAllChirpsHandler)
 	mux.HandleFunc("GET /api/chirps/{chirpID}", apiConfig.getChirpByIdHandler)
 	mux.HandleFunc("DELETE /api/chirps/{chirpID}", apiConfig.deleteChirpByIdHandler)
+	mux.HandleFunc("POST /api/polka/webhooks", apiConfig.polkaWebhookHandler)
 	mux.HandleFunc("GET /api/healthz", handlers.ReadinessHandler)
 	mux.HandleFunc("POST /admin/reset", apiConfig.resetMetricsHandler)
 	mux.HandleFunc("GET /admin/metrics", apiConfig.metricsHandler)
