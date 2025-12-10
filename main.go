@@ -79,11 +79,19 @@ type apiConfig struct {
 	db 				*database.Queries
 	platform 		string
 	secret 			string
+	polkaKey		string
 }
 
 func (cfg *apiConfig) polkaWebhookHandler(w http.ResponseWriter, r *http.Request) {
 	var webhookReq WebHook
-	err := json.NewDecoder(r.Body).Decode(&webhookReq)
+
+	apiKey, err := auth.GetAPIKey(r.Header)
+	if err != nil || apiKey != cfg.polkaKey {
+		http.Error(w, "Unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	err = json.NewDecoder(r.Body).Decode(&webhookReq)
 	if err != nil {
 		http.Error(w, "Bad request", http.StatusBadRequest)
 		return
@@ -544,6 +552,7 @@ func main() {
 	dbQueries := database.New(db)
 	platform := os.Getenv("PLATFORM")
 	secret := os.Getenv("SECRET")
+	polkaKey := os.Getenv("POLKA_KEY")
 	port := 8080
 	mux := http.NewServeMux()
 	server := &http.Server{
@@ -555,6 +564,7 @@ func main() {
 		db: dbQueries,
 		platform: platform,
 		secret: secret,
+		polkaKey: polkaKey,
 	}
 
 	mux.HandleFunc("POST /api/users", apiConfig.createUserHandler)
