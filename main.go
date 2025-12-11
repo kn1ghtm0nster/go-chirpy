@@ -267,13 +267,29 @@ func (cfg *apiConfig) createChirpHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request) {
-	chirps, err := cfg.db.GetAllChirps(r.Context())
+	authorID := r.URL.Query().Get("author_id")
+
+	var chirps []database.Chirp
+	var err error
+
+	if authorID != "" {
+		parsedID, parseErr := uuid.Parse(authorID)
+		if parseErr != nil {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+		chirps, err = cfg.db.GetChirpsByAuthorId(r.Context(), parsedID)
+	} else {
+		chirps, err = cfg.db.GetAllChirps(r.Context())
+	}
+
 	if err != nil {
 		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		return
 	}
 
 	resp := make([]Chirp, len(chirps))
+
 	for i, chirp := range chirps {
 		resp[i] = Chirp{
 			ID:        chirp.ID,
@@ -283,7 +299,7 @@ func (cfg *apiConfig) getAllChirpsHandler(w http.ResponseWriter, r *http.Request
 			UserID:    chirp.UserID,
 		}
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp)
